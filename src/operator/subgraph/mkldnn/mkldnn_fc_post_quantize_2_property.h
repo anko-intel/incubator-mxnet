@@ -265,6 +265,13 @@ class SgMKLDNNFC_PostQuantize_2_Property : public SubgraphProperty {
             std::rotate(orig_input_entries->begin(),
                         orig_input_entries->begin() + 1,
                         orig_input_entries->begin() + base_inputs);
+          } else {
+            std::rotate(input_entries->begin() + base_inputs - 1 ,
+                        input_entries->end() - 1,
+                        input_entries->end());
+            std::rotate(orig_input_entries->begin() + base_inputs - 1,
+                        orig_input_entries->end() - 1 ,
+                        orig_input_entries->end());
           }
         }
       });
