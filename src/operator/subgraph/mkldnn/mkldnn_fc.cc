@@ -532,6 +532,10 @@ static std::vector<std::string> SgMKLDNNFCListInputNames(const NodeAttrs &attrs)
   std::vector<std::string> input_names = DefaultSubgraphOpListInputs(attrs);
   if (full_param.mkldnn_param.quantized) {
     bool channel_wise = false;
+    if (full_param.mkldnn_param.with_sum) {
+      input_names.emplace_back("sum"); //TODO(anko) verify position
+    }
+
     if (full_param.mkldnn_param.channel_wise_quantize.has_value() &&
         full_param.mkldnn_param.channel_wise_quantize) {
       channel_wise = true;
@@ -768,7 +772,9 @@ NNVM_REGISTER_OP(_sg_mkldnn_fully_connected)
         full_param.mkldnn_param.channel_wise_quantize) {
       return num_inputs + 2;  // min_data, max_data
     } else {
-      return num_inputs * 3 ; //- (full_param.mkldnn_param.with_sum ? 2 : 0) ;  // TODO(anko) -2 for full_param.mkldnn_param.enable_float_output
+      const bool sum_input_float =
+        full_param.mkldnn_param.with_sum && full_param.mkldnn_param.enable_float_output;
+      return num_inputs * 3 - (sum_input_float ? 2 : 0);
     }
   } else {
     return num_inputs;
