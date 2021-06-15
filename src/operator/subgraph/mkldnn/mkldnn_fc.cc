@@ -140,10 +140,14 @@ void SgMKLDNNFCOp::Forward(const OpContext &ctx,
     total_num_inputs_ = base_num_inputs;
     total_num_outputs_ = base_num_outputs;
     if (mkldnn_param.quantized) {
-      total_num_inputs_ = channel_wise_runtime_ ? (base_num_inputs + 2) : (base_num_inputs * 3);
-      if  (mkldnn_param.with_sum && mkldnn_param.enable_float_output) {
+      if (channel_wise_runtime_) {
+        total_num_inputs_ = base_num_inputs + 2;
+      } else {
+        total_num_inputs_ = base_num_inputs * 3;
+        if  (mkldnn_param.with_sum && mkldnn_param.enable_float_output) {
           // input of sum is not quantized as it is the same type as float output
           total_num_inputs_ -= 2;
+        }
       }
       total_num_outputs_ =
         mkldnn_param.enable_float_output ? base_num_outputs : (base_num_outputs * 3);
