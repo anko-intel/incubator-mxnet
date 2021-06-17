@@ -106,7 +106,7 @@ void SgMKLDNNFCOp::Forward(const OpContext &ctx,
   auto &mkldnn_param = full_param_.mkldnn_param;
   auto &default_param = full_param_.default_param;
   bool has_bias = !default_param.no_bias;
-  const size_t base_num_inputs = (has_bias ? 3 : 2) + (mkldnn_param.with_sum ? 1 : 0); // TODO(anko) ? consider not increasing this  for with_sum enabled ?
+  const size_t base_num_inputs = (has_bias ? 3 : 2) + (mkldnn_param.with_sum ? 1 : 0);
   size_t base_num_outputs = 1;
 
   const int in_sum = has_bias ? fullc::kBias + 1 : fullc::kBias; //TODO(anko) remove kBias enum ? or all enums
@@ -122,7 +122,7 @@ void SgMKLDNNFCOp::Forward(const OpContext &ctx,
                              && !mkldnn_param.enable_float_output;
 
   //  quantized_fullc::kWeightMax = 4    ,  quantized_fullc::kBiasMax = 6
-  size_t in_sum_min =  sum_input_quantized ? (in_sum + 5) : 0; // TODO(anko) inputs order/numbers
+  const size_t in_sum_min =  sum_input_quantized ? (in_sum + 5) : 0; // TODO(anko) inputs order/numbers
 
   const float sum_min = sum_input_quantized
                       ? in_data[in_sum_min].data().dptr<float>()[0]
@@ -158,12 +158,10 @@ void SgMKLDNNFCOp::Forward(const OpContext &ctx,
 
   NDArray data = in_data[fullc::kData];
   const NDArray &weight = in_data[fullc::kWeight];
-  //const NDArray &output = out_data[fullc::kOut];
 
   NDArray output = mkldnn_param.with_sum ? in_data[in_sum] : out_data[fullc::kOut]; // TODO(anko) move asigment for in_data below
 
 
-  // Copy inputs[in_sum] into outputs[kOut] in case inplace optimization failed.
   if (mkldnn_param.with_sum) {
     if (!initialized_) {
       // TODO(zhennan): Currently, mkldnn fallback mechanism will break inplace option,
@@ -174,7 +172,10 @@ void SgMKLDNNFCOp::Forward(const OpContext &ctx,
         inplace_ = true;
       }
     }
-    if (!inplace_) {
+    if(inplace_) {
+      output = in_data[in_sum];
+    } else {
+      // Not in place: copy in_data[in_sum] into outputs[kOut].
       auto in_mkl_mem = in_data[in_sum].GetMKLDNNData();
       auto out_mkl_mem = out_data[fullc::kOut].GetMKLDNNData();
       if (out_data[fullc::kOut].dtype() == mshadow::kInt32) {
@@ -198,9 +199,9 @@ void SgMKLDNNFCOp::Forward(const OpContext &ctx,
         output = NDArray(tmp_mem);
       }
     }
+  } else {
+    output = out_data[fullc::kOut];
   }
-
-
 
   if (mkldnn_param.quantized) {
     if (!channel_wise_runtime_) {
@@ -406,7 +407,7 @@ void SgMKLDNNFCOp::Forward(const OpContext &ctx,
 
       if (mkldnn_param.with_sum && !mkldnn_param.enable_float_output) {
         float sum_in_scale =  GetQuantizeScale(in_data[in_sum].dtype(), cached_sum_min_, cached_sum_max_);
-        mkldnn_param.sum_scale = out_scale / sum_in_scale; // TODO(anko) scales for channel wise
+        mkldnn_param.sum_scale = out_scale / sum_in_scale;
       }
     } // if (mkldnn_param.quantized)
 

@@ -17,17 +17,12 @@
  * under the License.
  */
 
-/*!
- * Copyright (c) 2019 by Contributors
- * \file mkldnn_fc_property.cc
- * \brief Partition gragph property for FullyConnected operator
- * \author Ciyong Chen // TODO(anko)
+/*
+  \brief It fuzes FC + SUM for floating point output in second post quantization pass
 */
 
-// TODO(anko) integtate it with mkldnn_fc_property.cc code or made separate MKLDNN_QUANTIZE pass (before/after?)
-
-#ifndef MKLDNN_FC_POST_QUANTIZE_2_PROPERTY
-#define MKLDNN_FC_POST_QUANTIZE_2_PROPERTY
+#ifndef MKLDNN_FC_POST_QUANTIZE_SECOND
+#define MKLDNN_FC_POST_QUANTIZE_SECOND
 #if MXNET_USE_MKLDNN == 1
 
 #include <string>
@@ -40,7 +35,7 @@
 namespace mxnet {
 namespace op {
 
-class SgMKLDNNFCPostQuantize2Selector : public SubgraphSelector {
+class SgMKLDNNFCPostQuantizeSecondSelector : public SubgraphSelector {
  public:
   /*! \brief pattern match status */
   enum SelectStatus {
@@ -56,11 +51,9 @@ class SgMKLDNNFCPostQuantize2Selector : public SubgraphSelector {
   std::vector<const nnvm::Node *> matched_list_;
 
  public:
-  explicit SgMKLDNNFCPostQuantize2Selector(const bool dis_fc_eltwise, bool quantized) :
+  explicit SgMKLDNNFCPostQuantizeSecondSelector(const bool dis_fc_eltwise, bool quantized) :
       disable_fc_eltwise_(dis_fc_eltwise),
-      quantized_(quantized) {
-      //LOG(INFO) << " SgMKLDNNFCPostQuantize2Selector quantized="  << quantized_ ;
-      }
+      quantized_(quantized) {}
 
   bool Select(const nnvm::Node &n, const std::shared_ptr<NodeAttr>& node_attr) override {
     if (n.op() == Op::Get("_sg_mkldnn_fully_connected") && SupportMKLDNNAttr(node_attr)) {
@@ -159,25 +152,25 @@ class SgMKLDNNFCPostQuantize2Selector : public SubgraphSelector {
 
   void Reset() override {
     CHECK_GE(matched_list_.size(), 1);
-    auto new_selector = SgMKLDNNFCPostQuantize2Selector(disable_fc_eltwise_, quantized_);
+    auto new_selector = SgMKLDNNFCPostQuantizeSecondSelector(disable_fc_eltwise_, quantized_);
     new_selector.Select(*matched_list_[0], nullptr);
     *this = new_selector;
   }
 };
 
-class SgMKLDNNFC_PostQuantize_2_Property : public SubgraphProperty {
+class SgMKLDNNFCPostQuantizeSecondProperty : public SubgraphProperty {
  public:
-  SgMKLDNNFC_PostQuantize_2_Property() {
+  SgMKLDNNFCPostQuantizeSecondProperty() {
     disable_fc_eltwise_ = dmlc::GetEnv("MXNET_DISABLE_MKLDNN_FUSE_FC_ELTWISE", false);
   }
 
   static SubgraphPropertyPtr Create() {
 
-    static const std::string &name = "MKLDNN FullyConnected post quantization second pass"; // TODO(anko)
-    auto property = std::make_shared<SgMKLDNNFC_PostQuantize_2_Property>();
+    static const std::string &name = "MKLDNN FullyConnected post quantization second pass";
+    auto property = std::make_shared<SgMKLDNNFCPostQuantizeSecondProperty>();
     property->SetAttr<std::string>("property_name", name);
     property->SetAttr<bool>("inference_only", true);
-    if (dmlc::GetEnv("MXNET_DISABLE_MKLDNN_FC_OPT", 0)) { //TODO(anko)
+    if (dmlc::GetEnv("MXNET_DISABLE_MKLDNN_FC_SUM", 0)) { //TODO(anko)
       property->SetAttr<bool>("disable", true);
     }
     return property;
@@ -225,7 +218,7 @@ class SgMKLDNNFC_PostQuantize_2_Property : public SubgraphProperty {
   SubgraphSelectorPtr CreateSubgraphSelector() const override {
     bool quantized = HasAttr("quantize") ? GetAttr<bool>("quantize") : false;
     auto selector =
-      std::make_shared<SgMKLDNNFCPostQuantize2Selector>(disable_fc_eltwise_, quantized);
+      std::make_shared<SgMKLDNNFCPostQuantizeSecondSelector>(disable_fc_eltwise_, quantized);
     return selector;
   }
 
@@ -256,9 +249,6 @@ class SgMKLDNNFC_PostQuantize_2_Property : public SubgraphProperty {
           // the extra sum operand stays in the last of inputs.
           if (node_sets.count(node->inputs[1].node.get())) {
             std::swap( node->inputs[0],  node->inputs[1]);
-            // std::swap(input_entries[0][0],  input_entries[0][1]);
-            // std::swap(orig_input_entries[0][0],  orig_input_entries[0][1]);
-
             std::rotate(input_entries->begin(),
                         input_entries->begin() + 1,
                         input_entries->begin() + base_inputs );
