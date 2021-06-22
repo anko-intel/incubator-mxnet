@@ -56,7 +56,8 @@ class SgMKLDNNFCPostQuantizeSecondSelector : public SubgraphSelector {
   bool Select(const nnvm::Node &n, const std::shared_ptr<NodeAttr>& node_attr) override {
     if (n.op() == Op::Get("_sg_mkldnn_fully_connected") && SupportMKLDNNAttr(node_attr)) {
       auto const &fc_param = nnvm::get<MKLDNNFCFullParam>(n.attrs.parsed);
-      if (fc_param.mkldnn_param.enable_float_output && fc_param.mkldnn_param.quantized) { //TODO(anko) remove fc_param.mkldnn_param.quantized?
+      //TODO(anko) remove fc_param.mkldnn_param.quantized from if below to fuze even for not quantized?
+      if (fc_param.mkldnn_param.enable_float_output && fc_param.mkldnn_param.quantized) {
         status_ = kStart;
         matched_list_.clear();
         matched_list_.push_back(&n);
