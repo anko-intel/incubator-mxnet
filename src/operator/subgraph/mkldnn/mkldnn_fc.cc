@@ -29,6 +29,8 @@
 #include <utility>
 #include <vector>
 #include <string>
+#include <memory>
+#include <unordered_map>
 #include <unordered_set>
 #include "../common.h"
 #include "../../nn/mkldnn/mkldnn_base-inl.h"
