@@ -169,8 +169,6 @@ class SgMKLDNNFCSumFuzeProperty : public SubgraphProperty {
                                         ew_add_node->inputs[1] :
                                         ew_add_node->inputs[0];
         ew_input_with_fc.node = fc_orginal;
-        // ew_input_with_fc.index = 0;  // should be already set to 0
-        // ew_input_with_fc.version = 0;
         new_sym.outputs.emplace_back(ew_add_node);
         fc_node->attrs.subgraphs.clear();
         fc_node->attrs.subgraphs.emplace_back(std::make_shared<nnvm::Symbol>(new_sym));

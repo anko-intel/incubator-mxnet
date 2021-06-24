@@ -52,6 +52,68 @@ static inline size_t GetInSumIndex(const MKLDNNFCFullParam &param) {
 }
 
 
+class FCInputIndex
+{
+ public:
+  FCInputIndex(const MKLDNNFCFullParam full_param)
+  {
+    auto &mkldnn_param = full_param.mkldnn_param;
+    const bool has_bias = !full_param.default_param.no_bias;
+    const bool quantized = mkldnn_param.quantized;
+    const bool sum_input_quantized = quantized && mkldnn_param.with_sum &&
+                                    !mkldnn_param.enable_float_output;
+    const bool channel_wise = quantized && mkldnn_param.channel_wise_quantize.has_value() &&
+                              mkldnn_param.channel_wise_quantize;
+
+    // Calculate position of particular input in the input vector:
+    int index   = 0;
+    data          = index++;
+    weight        = index++;
+    bias          = has_bias ? index++ : 0;
+    num_quantized = index + (sum_input_quantized ? 1 : 0);
+    sum           = mkldnn_param.with_sum ?  index++: 0;
+    num_base      = index;
+
+    data_min      = quantized ? index++ : 0;
+    data_max      = quantized ? index++ : 0;
+    weight_min    = (quantized && !channel_wise) ? index++ : 0;
+    weight_max    = (quantized && !channel_wise) ? index++ : 0;
+    bias_min      = (quantized && !channel_wise && has_bias) ? index++ : 0;
+    bias_max      = (quantized && !channel_wise && has_bias) ? index++ : 0;
+    sum_min       = sum_input_quantized ? index++ : 0;
+    sum_max       = sum_input_quantized ? index++ : 0;
+    num_total     = index;
+  };
+
+  // true if sum input is used and it is float number
+  bool IsSumInputFloat() const { return (sum && !sum_min); }
+  int GetTotal() const { return num_total; }
+  int GetBase() const { return num_base; }
+
+  // return number of standard inputs which are quantized (represented as integer)
+  int GetQuantized() const { return num_quantized;}
+
+  // represents index of particular input in the input vector:
+  int data;
+  int weight;
+  int bias;
+  int sum;
+  int data_min;
+  int data_max;
+  int weight_min;
+  int weight_max;
+  int bias_min;
+  int bias_max;
+  int sum_min;
+  int sum_max;
+
+ private:
+  int num_base;       // Number of standard inputs
+  int num_total;      // Number of total inputs: standard + additional needed for quantization
+  int num_quantized;  // Number of standard inputs which are quantized
+};
+
+
 class SgMKLDNNFCOp {
  public:
   explicit SgMKLDNNFCOp(const nnvm::NodeAttrs &attrs)
@@ -103,37 +165,19 @@ void SgMKLDNNFCOp::Forward(const OpContext &ctx,
                            const std::vector<NDArray> &in_data,
                            const std::vector<OpReqType> &req,
                            const std::vector<NDArray> &out_data) {
-  auto &mkldnn_param = full_param_.mkldnn_param;
-  auto &default_param = full_param_.default_param;
+  auto &mkldnn_param        = full_param_.mkldnn_param;
+  auto &default_param       = full_param_.default_param;
+  const bool has_bias       = !default_param.no_bias;
+  const bool quantized      = mkldnn_param.quantized;
+  const bool out_quantized  = mkldnn_param.quantized && !mkldnn_param.enable_float_output;
+  const bool channel_wise   = quantized && mkldnn_param.channel_wise_quantize.has_value() &&
+                              mkldnn_param.channel_wise_quantize;
 
-  const bool has_bias = !default_param.no_bias;
-  const bool quantized = mkldnn_param.quantized;
-  const bool sum_input_quantized = quantized && mkldnn_param.with_sum &&
-                                   !mkldnn_param.enable_float_output;
-  const bool out_quantized = mkldnn_param.quantized && !mkldnn_param.enable_float_output;
+  const FCInputIndex idx(full_param_);
 
-  const bool channel_wise = quantized && mkldnn_param.channel_wise_quantize.has_value() &&
-                            mkldnn_param.channel_wise_quantize;
+  CHECK_EQ(in_data.size(), idx.GetTotal());
 
-  // Calculate position of particular input in in_data
-  // TODO(anko) Made separate function or class for it.
-  int index                   = 0;
-  const int data_index        = index++;
-  const int weight_index      = index++;
-  const int bias_index        = has_bias ? index++ : 0;
-  const int sum_index         = mkldnn_param.with_sum ?  index++: 0;
-
-  const int data_min_index    = quantized ? index++ : 0;
-  const int data_max_index    = quantized ? index++ : 0;
-  const int weight_min_index  = (quantized && !channel_wise) ? index++ : 0;
-  const int weight_max_index  = (quantized && !channel_wise) ? index++ : 0;
-  const int bias_min_index    = (quantized && !channel_wise && has_bias) ? index++ : 0;
-  const int bias_max_index    = (quantized && !channel_wise && has_bias) ? index++ : 0;
-  const int sum_min_index     = sum_input_quantized ? index++ : 0;
-  const int sum_max_index     = sum_input_quantized ? index++ : 0;
-  CHECK_EQ(in_data.size(), index);    // index is equal total number of inputs
-
-  index = 0;
+  int index = 0;
   const int out_index = index++;
   const int out_min_index = out_quantized ? index++ : 0;
   const int out_max_index = out_quantized ? index++ : 0;
@@ -146,28 +190,28 @@ void SgMKLDNNFCOp::Forward(const OpContext &ctx,
   float min_bias    = 0.0f;
   float max_bias    = 0.0f;
 
-  const float sum_min = sum_input_quantized ? in_data[sum_min_index].data().dptr<float>()[0] : 0.0;
-  const float sum_max = sum_input_quantized ? in_data[sum_max_index].data().dptr<float>()[0] : 0.0;
+  const float sum_min = idx.sum_min ? in_data[idx.sum_min].data().dptr<float>()[0] : 0.0;
+  const float sum_max = idx.sum_max ? in_data[idx.sum_max].data().dptr<float>()[0] : 0.0;
 
-  NDArray data = in_data[data_index];
-  const NDArray &weight = in_data[weight_index];
+  NDArray data = in_data[idx.data];
+  const NDArray &weight = in_data[idx.weight];
   NDArray output;
 
   if (mkldnn_param.with_sum) {
     if (!initialized_) {
       // TODO(zhennan): Currently, mkldnn fallback mechanism will break inplace option,
       // which make check (req[out_index] == kWriteInplace) useless.
-      auto in_mkl_mem = in_data[sum_index].GetMKLDNNData();
+      auto in_mkl_mem = in_data[idx.sum].GetMKLDNNData();
       auto out_mkl_mem = out_data[out_index].GetMKLDNNData();
       if (in_mkl_mem->get_data_handle() == out_mkl_mem->get_data_handle()) {
         inplace_ = true;
       }
     }
     if (inplace_) {
-      output = in_data[sum_index];
+      output = in_data[idx.sum];
     } else {
-      // Not in place: copy in_data[sum_index] into outputs[out_index].
-      auto in_mkl_mem = in_data[sum_index].GetMKLDNNData();
+      // Not in place: copy in_data[idx.sum] into outputs[out_index].
+      auto in_mkl_mem = in_data[idx.sum].GetMKLDNNData();
       auto out_mkl_mem = out_data[out_index].GetMKLDNNData();
       if (out_data[out_index].dtype() == mshadow::kInt32) {
         auto mem_desc = in_mkl_mem->get_desc();
@@ -195,15 +239,15 @@ void SgMKLDNNFCOp::Forward(const OpContext &ctx,
 
   if (mkldnn_param.quantized) {
     if (!channel_wise) {
-      min_weight = in_data[weight_min_index].data().dptr<float>()[0];
-      max_weight = in_data[weight_max_index].data().dptr<float>()[0];
+      min_weight = in_data[idx.weight_min].data().dptr<float>()[0];
+      max_weight = in_data[idx.weight_max].data().dptr<float>()[0];
       if (has_bias) {
-        min_bias = in_data[bias_min_index].data().dptr<float>()[0];
-        max_bias = in_data[bias_max_index].data().dptr<float>()[0];
+        min_bias = in_data[idx.bias_min].data().dptr<float>()[0];
+        max_bias = in_data[idx.bias_max].data().dptr<float>()[0];
       }
     }
-    min_data = in_data[data_min_index].data().dptr<float>()[0];
-    max_data = in_data[data_max_index].data().dptr<float>()[0];
+    min_data = in_data[idx.data_min].data().dptr<float>()[0];
+    max_data = in_data[idx.data_max].data().dptr<float>()[0];
   }
 
   if (initialized_ && mkldnn_param.quantized &&
@@ -212,7 +256,7 @@ void SgMKLDNNFCOp::Forward(const OpContext &ctx,
       if (cached_min_data_ != min_data || cached_max_data_ != max_data ||
           cached_sum_min_ != sum_min || cached_sum_max_ != sum_max ||
           weight_ver_ != weight.version() ||
-          (has_bias && (bias_ver_ != in_data[bias_index].version()))) {
+          (has_bias && (bias_ver_ != in_data[idx.bias].version()))) {
         initialized_ = false;
       }
     } else {
@@ -239,8 +283,8 @@ void SgMKLDNNFCOp::Forward(const OpContext &ctx,
     if (has_bias) {
       cached_min_bias_ = min_bias;
       cached_max_bias_ = max_bias;
-      bias_ver_ = in_data[bias_index].version();
-      cached_bias_ = in_data[bias_index];
+      bias_ver_ = in_data[idx.bias].version();
+      cached_bias_ = in_data[idx.bias];
     } else {
       cached_bias_ = NDArray();
     }
@@ -339,7 +383,7 @@ void SgMKLDNNFCOp::Forward(const OpContext &ctx,
             }
             weight_scales_[0] *= weight_rescale;
           }
-          NDArray bias = in_data[bias_index];
+          NDArray bias = in_data[idx.bias];
           cached_bias_ =
               NDArray(bias.storage_type(), bias.shape(), bias.ctx(), true, mshadow::kInt32);
           int8_t *bias_ptr = bias.data().dptr<int8_t>();
@@ -396,7 +440,7 @@ void SgMKLDNNFCOp::Forward(const OpContext &ctx,
 
       if (mkldnn_param.with_sum && !mkldnn_param.enable_float_output) {
         float sum_in_scale =
-          GetQuantizeScale(in_data[sum_index].dtype(), cached_sum_min_, cached_sum_max_);
+          GetQuantizeScale(in_data[idx.sum].dtype(), cached_sum_min_, cached_sum_max_);
         mkldnn_param.sum_scale = out_scale / sum_in_scale;
       }
     }   // if (mkldnn_param.quantized)
@@ -565,8 +609,7 @@ static inline void FillBaseInputOutputInfo(const MKLDNNFCFullParam &param,
                                            std::vector<T> *base_out_attrs,
                                            std::vector<T> *in_attrs,
                                            std::vector<T> *out_attrs) {
-  auto base_num_inputs = (param.default_param.no_bias ? 2 : 3) +
-                         (param.mkldnn_param.with_sum ? 1 : 0);
+  auto base_num_inputs = FCInputIndex(param).GetBase();
 
   base_out_attrs->push_back(out_attrs->at(0));
   for (int i = 0; i < base_num_inputs; ++i) {
@@ -613,11 +656,7 @@ static bool SgMKLDNNFCInferType(const nnvm::NodeAttrs &attrs,
         full_param.mkldnn_param.channel_wise_quantize) {
       channel_wise = true;
     }
-    // true if sum is fused with FC and have integer input and output
-    const bool integer_sum_input = full_param.mkldnn_param.with_sum &&
-                                   !full_param.mkldnn_param.enable_float_output;
-    size_t base_num_inputs = (full_param.default_param.no_bias ? 2 : 3)
-                            + (integer_sum_input ? 1 : 0);
+    size_t num_integer_inputs = FCInputIndex(full_param).GetQuantized();
     CHECK(in_types->at(0) == mshadow::kInt8 ||
           in_types->at(0) == mshadow::kUint8)
         << "QuantizedFullyConnected only supports int8/uint8 input, while "
@@ -626,7 +665,7 @@ static bool SgMKLDNNFCInferType(const nnvm::NodeAttrs &attrs,
       if (channel_wise) {
         TYPE_ASSIGN_CHECK(*in_types, i, mshadow::kFloat32);
       } else {
-        if (i < base_num_inputs) {
+        if (i < num_integer_inputs) {
           TYPE_ASSIGN_CHECK(*in_types, i, mshadow::kInt8);
         } else {
           TYPE_ASSIGN_CHECK(*in_types, i, mshadow::kFloat32);
@@ -694,7 +733,7 @@ std::vector<std::pair<int, int>> SgMKLDNNFCInplaceOption(
     const NodeAttrs &attrs) {
   auto const &param = nnvm::get<MKLDNNFCFullParam>(attrs.parsed);
   if (param.mkldnn_param.with_sum) {
-    return std::vector<std::pair<int, int>>{{GetInSumIndex(param), 0}};
+    return std::vector<std::pair<int, int>>{{FCInputIndex(param).sum, 0}};
   } else {
     return std::vector<std::pair<int, int>>();
   }
@@ -735,20 +774,16 @@ static bool SgMKLDNNAvoidFCQuantizeInput(const NodeAttrs& attrs, const size_t in
                                          const std::string quantize_granularity) {
   auto const &full_param = nnvm::get<MKLDNNFCFullParam>(attrs.parsed);
   std::unordered_set<size_t> avoid_indexes;
+  FCInputIndex idx(full_param);
   if (quantize_granularity == "channel-wise") {
     avoid_indexes.insert(fullc::kWeight);   // weight
     if (!full_param.default_param.no_bias) {
       avoid_indexes.insert(fullc::kBias);   // bias
     }
   }
-
-  if (full_param.mkldnn_param.with_sum) {
-    if (full_param.mkldnn_param.enable_float_output) {
-      size_t sum_index = full_param.default_param.no_bias ? fullc::kBias :  fullc::kBias + 1;
-      avoid_indexes.insert(sum_index);
-    }
+  if (idx.IsSumInputFloat()) {
+      avoid_indexes.insert(idx.sum);
   }
-
   return avoid_indexes.count(index_to_check);
 }
 
@@ -756,21 +791,7 @@ NNVM_REGISTER_OP(_sg_mkldnn_fully_connected)
 .describe(R"code(_sg_mkldnn_fully_connected)code" ADD_FILELINE)
 .set_num_inputs([](const NodeAttrs& attrs) {
   auto const &full_param = nnvm::get<MKLDNNFCFullParam>(attrs.parsed);
-  auto num_inputs = (full_param.default_param.no_bias ? 2 : 3)
-                  + (full_param.mkldnn_param.with_sum ? 1 : 0);
-
-  if (full_param.mkldnn_param.quantized) {
-    if (full_param.mkldnn_param.channel_wise_quantize.has_value() &&
-        full_param.mkldnn_param.channel_wise_quantize) {
-      return num_inputs + 2;  // min_data, max_data
-    } else {
-      const bool sum_input_float =
-        full_param.mkldnn_param.with_sum && full_param.mkldnn_param.enable_float_output;
-      return num_inputs * 3 - (sum_input_float ? 2 : 0);
-    }
-  } else {
-    return num_inputs;
-  }
+  return FCInputIndex(full_param).GetTotal();
 })
 .set_num_outputs([](const NodeAttrs& attrs) {
   auto const &full_param = nnvm::get<MKLDNNFCFullParam>(attrs.parsed);
