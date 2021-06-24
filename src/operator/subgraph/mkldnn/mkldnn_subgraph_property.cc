@@ -23,7 +23,7 @@
 #include "mkldnn_fc_property.h"
 #include "mkldnn_post_quantize_property.h"
 #include "mkldnn_fc_post_quantize_property.h"
-#include "mkldnn_fc_post_quantize_second.h"
+#include "mkldnn_fc_sum_fuze.h"
 #include "mkldnn_elemwisemul_post_quantize_property.h"
 #include "mkldnn_post_quantize_align_scale_property.h"
 #include "mkldnn_transformer_property.h"
@@ -61,7 +61,7 @@ MXNET_REGISTER_SUBGRAPH_PROPERTY(MKLDNN_QUANTIZE, SgMKLDNNFCPostQuantizeProperty
 MXNET_REGISTER_SUBGRAPH_PROPERTY(MKLDNN_QUANTIZE, ElemwiseMulPostQuantizeProperty);
 
 MXNET_REGISTER_SUBGRAPH_PROPERTY(MKLDNN_QUANTIZE, SgMKLDNNPostQuantizeAlignScaleProperty);
-MXNET_REGISTER_SUBGRAPH_PROPERTY(MKLDNN_QUANTIZE, SgMKLDNNFCPostQuantizeSecondProperty)
+MXNET_REGISTER_SUBGRAPH_PROPERTY(MKLDNN_QUANTIZE, SgMKLDNNFCSumFuzeProperty)
 .set_attr("quantize", true);
 
 }  // namespace op

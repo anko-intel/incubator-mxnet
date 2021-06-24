@@ -115,6 +115,8 @@ void SgMKLDNNFCOp::Forward(const OpContext &ctx,
   const bool channel_wise = quantized && mkldnn_param.channel_wise_quantize.has_value() &&
                             mkldnn_param.channel_wise_quantize;
 
+  // Calculate position of particular input in in_data
+  // TODO(anko) Made separate function or class for it.
   int index                   = 0;
   const int data_index        = index++;
   const int weight_index      = index++;
@@ -168,11 +170,10 @@ void SgMKLDNNFCOp::Forward(const OpContext &ctx,
       auto in_mkl_mem = in_data[sum_index].GetMKLDNNData();
       auto out_mkl_mem = out_data[out_index].GetMKLDNNData();
       if (out_data[out_index].dtype() == mshadow::kInt32) {
-        const auto& mem_desc = in_mkl_mem->get_desc();
-        const auto this_dtype = get_mkldnn_type(mshadow::kInt32);
-        auto omd = mem_desc;
-        omd.data.data_type = static_cast<mkldnn_data_type_t>(this_dtype);
-        mkldnn_mem_ptr tmp_mem(new mkldnn::memory(omd, CpuEngine::Get()->get_engine(),
+        auto mem_desc = in_mkl_mem->get_desc();
+        auto this_dtype = get_mkldnn_type(mshadow::kInt32);
+        mem_desc.data.data_type = static_cast<mkldnn_data_type_t>(this_dtype);
+        mkldnn_mem_ptr tmp_mem(new mkldnn::memory(mem_desc, CpuEngine::Get()->get_engine(),
                                                   out_mkl_mem->get_data_handle()));
         MKLDNNStream::Get()->RegisterMem(tmp_mem);
         MKLDNNStream::Get()->RegisterPrimArgs(
@@ -435,16 +436,14 @@ void SgMKLDNNFCOp::Forward(const OpContext &ctx,
     initialized_ = true;
   }
 
-
   if (mkldnn_param.with_sum) {
     const auto& output_mem = output.GetMKLDNNData();
     const auto& out_mem_desc = output_mem->get_desc();
-    const auto& dst_mem_desc = fwd_->fwd_pd.dst_desc();
+    auto dst_mem_desc = fwd_->fwd_pd.dst_desc();
     if (out_mem_desc != dst_mem_desc) {
-      auto tmp_out_mem = output.GetMKLDNNDataReorder(fwd_->fwd_pd.dst_desc());
-      auto data_md = dst_mem_desc;
-      data_md.data.data_type = static_cast<mkldnn_data_type_t>(out_mem_desc.data.data_type);
-      mkldnn_mem_ptr new_out_mem(new mkldnn::memory(data_md, CpuEngine::Get()->get_engine(),
+      auto tmp_out_mem = output.GetMKLDNNDataReorder(dst_mem_desc);
+      dst_mem_desc.data.data_type = out_mem_desc.data.data_type;
+      mkldnn_mem_ptr new_out_mem(new mkldnn::memory(dst_mem_desc, CpuEngine::Get()->get_engine(),
                                                     output_mem->get_data_handle()));
       MKLDNNStream::Get()->RegisterMem(new_out_mem);
       MKLDNNMemoryCopy(*tmp_out_mem, new_out_mem.get());

@@ -21,8 +21,8 @@
   \brief It fuzes FC + SUM for floating point output in second post quantization pass
 */
 
-#ifndef MXNET_OPERATOR_SUBGRAPH_MKLDNN_MKLDNN_FC_POST_QUANTIZE_SECOND_H_
-#define MXNET_OPERATOR_SUBGRAPH_MKLDNN_MKLDNN_FC_POST_QUANTIZE_SECOND_H_
+#ifndef MXNET_OPERATOR_SUBGRAPH_MKLDNN_MKLDNN_FC_SUM_FUZE_H_
+#define MXNET_OPERATOR_SUBGRAPH_MKLDNN_MKLDNN_FC_SUM_FUZE_H_
 #if MXNET_USE_MKLDNN == 1
 
 #include <string>
@@ -38,7 +38,7 @@
 namespace mxnet {
 namespace op {
 
-class SgMKLDNNFCPostQuantizeSecondSelector : public SubgraphSelector {
+class SgMKLDNNFCSumFuzeSelector : public SubgraphSelector {
  public:
   /*! \brief pattern match status */
   enum SelectStatus {
@@ -53,7 +53,7 @@ class SgMKLDNNFCPostQuantizeSecondSelector : public SubgraphSelector {
   std::vector<const nnvm::Node *> matched_list_;
 
  public:
-  explicit SgMKLDNNFCPostQuantizeSecondSelector(bool quantized) :
+  explicit SgMKLDNNFCSumFuzeSelector(bool quantized) :
       quantized_(quantized) {}
 
   bool Select(const nnvm::Node &n, const std::shared_ptr<NodeAttr>& node_attr) override {
@@ -123,19 +123,19 @@ class SgMKLDNNFCPostQuantizeSecondSelector : public SubgraphSelector {
 
   void Reset() override {
     CHECK_GE(matched_list_.size(), 1);
-    auto new_selector = SgMKLDNNFCPostQuantizeSecondSelector(quantized_);
+    auto new_selector = SgMKLDNNFCSumFuzeSelector(quantized_);
     new_selector.Select(*matched_list_[0], nullptr);
     *this = new_selector;
   }
 };
 
-class SgMKLDNNFCPostQuantizeSecondProperty : public SubgraphProperty {
+class SgMKLDNNFCSumFuzeProperty : public SubgraphProperty {
  public:
-  SgMKLDNNFCPostQuantizeSecondProperty() {}
+  SgMKLDNNFCSumFuzeProperty() {}
 
   static SubgraphPropertyPtr Create() {
     static const std::string &name = "MKLDNN FullyConnected post quantization second pass";
-    auto property = std::make_shared<SgMKLDNNFCPostQuantizeSecondProperty>();
+    auto property = std::make_shared<SgMKLDNNFCSumFuzeProperty>();
     property->SetAttr<std::string>("property_name", name);
     property->SetAttr<bool>("inference_only", true);
     if (dmlc::GetEnv("MXNET_DISABLE_MKLDNN_FC_SUM", 0)) {
@@ -184,7 +184,7 @@ class SgMKLDNNFCPostQuantizeSecondProperty : public SubgraphProperty {
   SubgraphSelectorPtr CreateSubgraphSelector() const override {
     bool quantized = HasAttr("quantize") ? GetAttr<bool>("quantize") : false;
     auto selector =
-      std::make_shared<SgMKLDNNFCPostQuantizeSecondSelector>(quantized);
+      std::make_shared<SgMKLDNNFCSumFuzeSelector>(quantized);
     return selector;
   }
 
@@ -239,4 +239,4 @@ class SgMKLDNNFCPostQuantizeSecondProperty : public SubgraphProperty {
 }  // namespace mxnet
 
 #endif  // if MXNET_USE_MKLDNN == 1
-#endif  // MXNET_OPERATOR_SUBGRAPH_MKLDNN_MKLDNN_FC_POST_QUANTIZE_SECOND_H_
+#endif  // MXNET_OPERATOR_SUBGRAPH_MKLDNN_MKLDNN_FC_SUM_FUZE_H_
