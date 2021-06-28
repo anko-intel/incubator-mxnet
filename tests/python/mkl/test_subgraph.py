@@ -104,6 +104,21 @@ def check_qsym_forward(qsym, qarg_params, qaux_params, batch, data_shape):
     output.wait_to_read()
   return mod.get_outputs()
 
+
+def check_qsym_forward_2(qsym, qarg_params, qaux_params, batch, data_shapes):
+  data_names = ()
+  for data_shape in data_shapes:
+    data_names += (data_shape[0],)
+  mod = Module(symbol=qsym, data_names=data_names, label_names=None, context=mx.current_context())
+  mod.bind(for_training=False,
+           data_shapes=data_shapes)
+  mod.set_params(qarg_params, qaux_params)
+  mod.forward(batch, is_train=False)
+  for output in mod.get_outputs():
+    output.wait_to_read()
+  return mod.get_outputs()
+
+
 def check_qsym_dummy_forward(qsym, batch, data_shape):
   mod = Module(symbol=qsym, label_names=None, context=mx.current_context())
   mod.bind(for_training=False,
@@ -113,6 +128,20 @@ def check_qsym_dummy_forward(qsym, batch, data_shape):
   for output in mod.get_outputs():
     output.wait_to_read()
   return mod.get_outputs()
+
+def check_qsym_dummy_forward_2(qsym, batch, data_shapes):
+  data_names = ()
+  for data_shape in data_shapes:
+    data_names += (data_shape[0],)
+  mod = Module(symbol=qsym, data_names=data_names, label_names=None, context=mx.current_context())
+  mod.bind(for_training=False,
+           data_shapes=data_shapes)
+  mod.init_params(initializer=mx.init.Xavier(magnitude=2.))
+  mod.forward(batch, is_train=False)
+  for output in mod.get_outputs():
+    output.wait_to_read()
+  return mod.get_outputs()
+
 
 def check_qsym_gluon_forward(qsym, qarg_params, qaux_params, data_shape):
   # save qsym to JSON file
@@ -128,6 +157,32 @@ def check_qsym_gluon_forward(qsym, qarg_params, qaux_params, data_shape):
 
   data = mx.random.uniform(-1.0, 1.0, shape=data_shape)
   net(data)
+
+
+def check_qsym_gluon_forward_2(qsym, qarg_params, qaux_params, data_shapes):
+  # save qsym to JSON file
+  qsym.save('quantized-symbol.json')
+  # save params
+  save_dict = {('arg:%s' % k): v.as_in_context(mx.current_context()) for k, v in qarg_params.items()}
+  save_dict.update({('aux:%s' % k): v.as_in_context(mx.current_context()) for k, v in qaux_params.items()})
+  mx.nd.save('quantized-0000.params', save_dict)
+  # load back with SymbolBlock
+  input_names = []
+  for data_shape in data_shapes:
+    input_names.append(data_shape[0])
+  net = mx.gluon.SymbolBlock.imports('quantized-symbol.json', input_names, 'quantized-0000.params')
+  net.collect_params().reset_ctx(ctx = mx.current_context())
+  net.hybridize()
+
+  # TODO(anko) Prepare code below for any number of inputs
+  # data = []
+  # for data_shape in data_shapes:
+  #   data.append(mx.random.uniform(-1.0, 1.0, shape=data_shape[1]))
+  # net(data)
+  data = mx.random.uniform(-1.0, 1.0, shape=data_shapes[0][1])
+  data_2 = mx.random.uniform(-1.0, 1.0, shape=data_shapes[1][1])
+  net(data,data_2)
+
 
 class CalibIter(mx.io.DataIter):
     def __init__(self, batch, data_shape, batch_size):
@@ -206,6 +261,93 @@ def check_quantize(sym, data_shape, out_type, name='conv',
         atol = 0.1 * max(abs(min_range), abs(max_range))
         assert_almost_equal_with_err(quantized_out[i].asnumpy(), ref_out[i].asnumpy(), rtol=0.1, atol=atol, etol=0.2)
       check_qsym_dummy_forward(qsym, batch, data_shape)
+
+
+def check_fusion_parameter(sym_sg, attrs_dict):
+  #sym_sg = sym.get_backend_symbol(SG_PASS_NAME)
+  for name, attrs in attrs_dict.items():
+    if name in config:
+      op_name = config[name][OP_NAME]
+    else:
+      op_name = name
+    assert ''.join(sym_sg.get_internals().list_outputs()).find(op_name) != -1
+    if len(attrs):
+        found = False
+        for k, v in sym_sg.attr_dict().items():
+          if k.find(op_name) != -1:
+            found = True
+            for attr_name, attr_value in attrs.items():
+              assert v[attr_name].lower() == attr_value.lower()
+        assert found
+
+
+def check_quantize_2(sym, data_shapes, out_type, atrs, name='conv',
+                   check_calibration=True, gluon_forward=False, check_scale_align=False, quantize_mode='smart'):
+  quantize_granularity_list = ['tensor-wise']
+  if name == 'fc':
+    quantize_granularity_list += ['channel-wise']
+
+  if name in config:
+    name = config[name][OP_NAME]
+  sym_sg = sym.get_backend_symbol(QUANTIZE_SG_PASS_NAME)
+  data_names = ()
+  for data_shape in data_shapes:
+    data_names += (data_shape[0],)
+  mod = Module(symbol=sym, data_names=data_names, label_names=None)
+  mod.bind(for_training=False, data_shapes=data_shapes)
+  mod.init_params(mx.init.Normal(0.5))
+  arg_params, aux_params = mod.get_params()
+
+  if out_type == 'uint8':
+    data = [mx.random.uniform(0.0, 1.0, shape=shape, ctx=mx.current_context()) for _, shape in mod.data_shapes]
+  else:
+    data = [mx.random.uniform(-1.0, 1.0, shape=shape, ctx=mx.current_context()) for _, shape in mod.data_shapes]
+  batch = mx.io.DataBatch(data, [])
+
+  mod.forward(batch, is_train=False)
+  for output in mod.get_outputs():
+      output.wait_to_read()
+  ref_out = mod.get_outputs()
+
+  excluded_sym_names = []
+  excluded_op_names = []
+  if mx.current_context() == mx.cpu() and gluon_forward == True:
+    excluded_op_names += ['_sg_mkldnn_fully_connected']
+
+  calib_data = CalibIter(batch, data_shapes, 1)
+
+  for quantize_granularity in quantize_granularity_list:
+    qsym, qarg_params, qaux_params = mx.contrib.quant.quantize_model(sym=sym_sg,
+                                                                    arg_params=arg_params,
+                                                                    aux_params=aux_params,
+                                                                    ctx=mx.current_context(),
+                                                                    excluded_sym_names=excluded_sym_names,
+                                                                    excluded_op_names=excluded_op_names,
+                                                                    quantized_dtype=out_type,
+                                                                    data_names=data_names,
+                                                                    calib_mode='naive',
+                                                                    calib_data=calib_data,
+                                                                    label_names=None,
+                                                                    num_calib_examples=1,
+                                                                    quantize_mode=quantize_mode,
+                                                                    quantize_granularity=quantize_granularity)
+    qsym = qsym.get_backend_symbol(QUANTIZE_SG_PASS_NAME)
+    check_fusion_parameter(qsym, atrs)
+    if check_calibration:
+      check_qsym_calibrated(qsym, out_type, name=name)
+    if check_scale_align:
+      check_qsym_scale_align(qsym)
+    if gluon_forward == True:
+      check_qsym_gluon_forward_2(qsym, qarg_params, qaux_params, data_shapes)
+    else:
+      quantized_out = check_qsym_forward_2(qsym, qarg_params, qaux_params, batch, data_shapes)
+      for i in range(len(ref_out)):
+        min_range = mx.nd.min(ref_out[i]).asscalar()
+        max_range = mx.nd.max(ref_out[i]).asscalar()
+        atol = 0.1 * max(abs(min_range), abs(max_range))
+        assert_almost_equal_with_err(quantized_out[i].asnumpy(), ref_out[i].asnumpy(), rtol=0.1, atol=atol, etol=0.2)
+      check_qsym_dummy_forward_2(qsym, batch, data_shapes)
+
 
 @with_seed()
 def check_quantize_whole_model_with_forward():
@@ -397,6 +539,18 @@ def conv_add2(no_bias, data_shape):
   pool = mx.sym.Pooling(data=conv2, kernel=(1, 1), pool_type='avg', name='pool')
   sum = pool + conv1
   return sum, attr
+
+# fc + sum quantized fusion
+def fc_sum(no_bias, data_shape):
+  attr = {'fc': {'with_sum': 'true', 'quantized' : 'true', 'enable_float_output': 'true'}}
+  data, weight = head_symbol(data_shape)
+  sym1 = mx.symbol.FullyConnected(data=data, weight=weight, no_bias=no_bias, num_hidden=10)
+  #sym2 = mx.symbol.FullyConnected(data=data, weight=weight, no_bias=no_bias, num_hidden=10)
+  data2 = mx.symbol.var('data_2', shape= (data_shape[0], 10), dtype="float32", init = mx.init.Normal(0.3))
+  sum = mx.symbol.elemwise_add(data2, sym1)
+  inputs = [('data', data_shape), ('data_2', (data_shape[0], 10))]
+  return sum, attr, inputs
+
 
 # conv + bn + act fusion case
 def conv_bn_act(no_bias, data_shape, alg):
@@ -787,6 +941,16 @@ def test_pos_conv_bn_act():
       check_fusion(net, data_shape, attrs, check_quantization=quantize)
       net, attrs = conv_bn_act(True, data_shape, alg)
       check_fusion(net, data_shape, attrs, check_quantization=quantize)
+
+
+@with_seed()
+def test_pos_fc_sum():
+  for data_shape in DATA_SHAPE:
+    for out_type in ('auto',):
+      net, attrs, inputs = fc_sum(False, data_shape)
+      check_quantize_2(net, inputs, out_type, attrs, name='fc', check_calibration=False)
+      #check_quantize_2(net, inputs, out_type, name='fc', check_calibration=False, gluon_forward=True)
+
 
 @with_seed()
 def test_pos_conv_bn_sum_act():
