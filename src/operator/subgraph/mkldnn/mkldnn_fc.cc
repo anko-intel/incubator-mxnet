@@ -66,7 +66,7 @@ class FCInputIndex
                               mkldnn_param.channel_wise_quantize;
 
     // Calculate position of particular input in the input vector:
-    int index   = 0;
+    int index     = 0;
     data          = index++;
     weight        = index++;
     bias          = has_bias ? index++ : 0;
@@ -93,7 +93,7 @@ class FCInputIndex
   // return number of standard inputs which are quantized (represented as integer)
   int GetQuantized() const { return num_quantized;}
 
-  // represents index of particular input in the input vector:
+  // Represent index of particular input in the input vector:
   int data;
   int weight;
   int bias;
@@ -181,7 +181,7 @@ void SgMKLDNNFCOp::Forward(const OpContext &ctx,
   const int out_index = index++;
   const int out_min_index = out_quantized ? index++ : 0;
   const int out_max_index = out_quantized ? index++ : 0;
-  CHECK_EQ(out_data.size(), index);   // index is equal total number of outpits
+  CHECK_EQ(out_data.size(), index);   // index is equal to total number of outpits
 
   float min_data    = 0.0f;
   float max_data    = 0.0f;
